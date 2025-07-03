@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+docker run --rm -it \
+  --volume nix-global-store:/nix \
+  --volume nix-user-cache:/root/.cache/nix \
+  --volume nvim-plugins:/root/.local/share/nvim \
+  --volume ${PWD}:/workdir \
+  --workdir /workdir \
+  nixos/nix:latest \
+  ${1:-nix-shell --pure}
+
