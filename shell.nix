@@ -3,8 +3,6 @@ let
   pkgs = import nixpkgs { config = {}; overlays = []; };
 in
 pkgs.mkShellNoCC {
-  XDG_CONFIG_HOME=".nix-config";
-
   packages = [
     pkgs.curl
     pkgs.cacert

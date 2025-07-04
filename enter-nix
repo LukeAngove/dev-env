@@ -1,11 +1,67 @@
 #!/usr/bin/env bash
 
+# Get directory containing the original version of this script
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]
+do
+  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+  TARGET="$(readlink "$SOURCE")"
+  [[ "$TARGET" != /* ]] && TARGET="$DIR/$TARGET"
+  SOURCE="$TARGET"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$TARGET")" >/dev/null 2>&1 && pwd)"
+
+CONTAINER_HOME="/root"
+
+# If any of the follow dirs exist, mount them.
+IMPORTS=(
+  ".config/github-copilot"
+  ".config/gh"
+  ".config/gh-copilot"
+  ".bash_aliases"
+  ".bashrc"
+  ".bashrc.d"
+  ".profile"
+  ".profile.d"
+  ".netrc"
+  ".gitconfig"
+  ".gitrepos"
+  ".ssh"
+)
+
+VOLUMES=""
+
+# Find which dirs exist, redirect HOME
+for TARGET in "${IMPORTS[@]}"
+do
+  HOST_TARGET="$HOME/$TARGET"
+  if [ -e HOST_TARGET ]
+  then
+    INNER_TARGET="$CONTAINER_HOME/$TARGET"
+    VOLUMES="$VOLUMES --volume $HOST_TARGET:$INNER_TARGET"
+  else
+    echo "Target $HOST_TARGET does not exist, skipping"
+  fi
+done
+
+HEALTH_SCRIPT="checkhealth.sh"
+
+if [ $# -eq 1 ] && [ "$1" = "checkhealth" ]
+then
+  CMD="nix-shell --pure --run $CONTAINER_HOME/$HEALTH_SCRIPT"
+else
+  CMD=${@:-nix-shell --pure}
+fi
+
 docker run --rm -it \
+  --volume ${PWD}:/workdir \
   --volume nix-global-store:/nix \
   --volume nix-user-cache:/root/.cache/nix \
   --volume nvim-plugins:/root/.local/share/nvim \
-  --volume ${PWD}:/workdir \
+  --volume ${SCRIPT_DIR}/nvim_config:$CONTAINER_HOME/.config/nvim \
+  --volume ${SCRIPT_DIR}/$HEALTH_SCRIPT:$CONTAINER_HOME/$HEALTH_SCRIPT \
+  --volume ${SCRIPT_DIR}/shell.nix:/workdir/shell.nix \
   --workdir /workdir \
-  nixos/nix:latest \
-  ${1:-nix-shell --pure}
+  docker.io/nixos/nix:latest \
+  ${CMD}
 
