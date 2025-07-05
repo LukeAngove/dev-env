@@ -1,67 +1,194 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-# Get directory containing the original version of this script
-SOURCE="${BASH_SOURCE[0]}"
-while [ -L "$SOURCE" ]
-do
-  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
-  TARGET="$(readlink "$SOURCE")"
-  [[ "$TARGET" != /* ]] && TARGET="$DIR/$TARGET"
-  SOURCE="$TARGET"
-done
-SCRIPT_DIR="$(cd -P "$(dirname "$TARGET")" >/dev/null 2>&1 && pwd)"
+DEBUG=false
+MODE="default"
+ARGS=()
 
-CONTAINER_HOME="/root"
+debug() {
+  $DEBUG && echo "[DEBUG]" "$@" || true
+}
 
-# If any of the follow dirs exist, mount them.
-IMPORTS=(
-  ".config/github-copilot"
-  ".config/gh"
-  ".config/gh-copilot"
-  ".bash_aliases"
-  ".bashrc"
-  ".bashrc.d"
-  ".profile"
-  ".profile.d"
-  ".netrc"
-  ".gitconfig"
-  ".gitrepos"
-  ".ssh"
-)
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --debug)
+        DEBUG=true
+        ;;
+      checkhealth)
+        MODE="checkhealth"
+        ;;
+      *)
+        ARGS+=("$1")
+        ;;
+    esac
+    shift
+  done
+}
 
-VOLUMES=""
+resolve_script_dir() {
+  local source="${BASH_SOURCE[0]}"
 
-# Find which dirs exist, redirect HOME
-for TARGET in "${IMPORTS[@]}"
-do
-  HOST_TARGET="$HOME/$TARGET"
-  if [ -e HOST_TARGET ]
-  then
-    INNER_TARGET="$CONTAINER_HOME/$TARGET"
-    VOLUMES="$VOLUMES --volume $HOST_TARGET:$INNER_TARGET"
+  while [ -L "$source" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd)"
+    local target
+    target="$(readlink "$source")"
+    [[ "$target" != /* ]] && target="$dir/$target"
+    source="$target"
+  done
+
+  SCRIPT_DIR="$(cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd)"
+  debug "Resolved script directory: $SCRIPT_DIR"
+}
+
+setup_user_info() {
+  USER_ID=$(id -u)
+  GROUP_ID=$(id -g)
+  USER_NAME=$(id -un)
+  CONTAINER_HOME="${CONTAINER_HOME:-/root}"
+
+  debug "User: $USER_NAME ($USER_ID:$GROUP_ID)"
+  debug "Host HOME: $HOME"
+  debug "Container HOME: $CONTAINER_HOME"
+}
+
+
+detect_container_engine() {
+  if command -v docker &>/dev/null; then
+    ENGINE="docker"
+  elif command -v podman &>/dev/null; then
+    ENGINE="podman"
   else
-    echo "Target $HOST_TARGET does not exist, skipping"
+    echo "❌ Error: Docker or Podman not found." >&2
+    exit 1
   fi
-done
+  debug "Using container engine: $ENGINE"
+}
 
-HEALTH_SCRIPT="checkhealth.sh"
+setup_gui_support() {
+  USE_WAYLAND=false
+  USE_X11=false
+  GUI_ARGS=()
 
-if [ $# -eq 1 ] && [ "$1" = "checkhealth" ]
-then
-  CMD="nix-shell --pure --run $CONTAINER_HOME/$HEALTH_SCRIPT"
-else
-  CMD=${@:-nix-shell --pure}
-fi
+  if [[ -n "${WAYLAND_DISPLAY-}" && -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]; then
+    USE_WAYLAND=true
+    echo "✔ Wayland detected: $WAYLAND_DISPLAY"
+    local socket="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+    GUI_ARGS+=(
+      --env "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+      --env "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+      --volume "$socket:$socket"
+      --volume "$XDG_RUNTIME_DIR:$XDG_RUNTIME_DIR"
+      --device /dev/dri
+    )
+  elif [[ -n "${DISPLAY-}" && -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]]; then
+    USE_X11=true
+    echo "✔ X11 detected: $DISPLAY"
+    xhost +SI:localuser:"$USER_NAME" >/dev/null || true
+    GUI_ARGS+=(
+      --env "DISPLAY=$DISPLAY"
+      --volume /tmp/.X11-unix:/tmp/.X11-unix:ro
+    )
+  else
+    echo "⚠️ No GUI environment detected. Continuing without GUI support."
+  fi
+}
 
-docker run --rm -it \
-  --volume ${PWD}:/workdir \
-  --volume nix-global-store:/nix \
-  --volume nix-user-cache:/root/.cache/nix \
-  --volume nvim-plugins:/root/.local/share/nvim \
-  --volume ${SCRIPT_DIR}/nvim_config:$CONTAINER_HOME/.config/nvim \
-  --volume ${SCRIPT_DIR}/$HEALTH_SCRIPT:$CONTAINER_HOME/$HEALTH_SCRIPT \
-  --volume ${SCRIPT_DIR}/shell.nix:/workdir/shell.nix \
-  --workdir /workdir \
-  docker.io/nixos/nix:latest \
-  ${CMD}
+prepare_dotfile_mounts() {
+  IMPORTS=(
+    ".config/github-copilot"
+    ".config/gh"
+    ".config/gh-copilot"
+    ".bash_aliases"
+    ".bashrc"
+    ".bashrc.d"
+    ".profile"
+    ".profile.d"
+    ".netrc"
+    ".gitconfig"
+    ".gitrepos"
+    ".ssh"
+  )
 
+  DOTFILE_MOUNTS=()
+  for target in "${IMPORTS[@]}"; do
+    local host_target="$HOME/$target"
+    local container_target="$CONTAINER_HOME/$target"
+    if [[ -e "$host_target" ]]; then
+      DOTFILE_MOUNTS+=(--volume "$host_target:$container_target:ro")
+      debug "Mounting dotfile: $host_target -> $container_target"
+    else
+      debug "Skipping missing: $host_target"
+    fi
+  done
+}
+
+prepare_volumes() {
+  VOLUMES=(
+    --volume "$PWD:/workdir"
+    --volume nix-global-store:/nix
+    --volume nix-user-cache:/root/.cache/nix
+    --volume nvim-plugins:/root/.local/share/nvim
+    --volume "$SCRIPT_DIR/nvim_config:$CONTAINER_HOME/.config/nvim"
+    --volume "$SCRIPT_DIR/checkhealth.sh:$CONTAINER_HOME/checkhealth.sh"
+    --volume "$SCRIPT_DIR/shell.nix:/workdir/shell.nix"
+  )
+}
+
+prepare_common_args() {
+  COMMON_ARGS=(
+    --workdir=/workdir
+  )
+  if [[ "$ENGINE" == "podman" ]]; then
+    COMMON_ARGS+=(--security-opt label=type:container_runtime_t)
+  fi
+}
+
+determine_command() {
+  if [[ "$MODE" == "checkhealth" ]]; then
+    CMD=("nix-shell" "--pure" "--run" "$CONTAINER_HOME/checkhealth.sh")
+
+  elif [[ ${#ARGS[@]} -gt 0 ]]; then
+    CMD=("${ARGS[@]}")
+
+  else
+    CMD=("nix-shell" "--pure")
+  fi
+
+  debug "CMD: ${CMD[*]}"
+}
+
+run_container() {
+  "$ENGINE" run --rm --tty --interactive \
+    "${VOLUMES[@]}" \
+    "${DOTFILE_MOUNTS[@]}" \
+    "${COMMON_ARGS[@]}" \
+    "${GUI_ARGS[@]}" \
+    docker.io/nixos/nix:latest \
+    "${CMD[@]}"
+}
+
+main() {
+  parse_args "$@"
+
+  # Setup environment information
+  resolve_script_dir
+  setup_user_info
+  detect_container_engine
+
+  # Setup GUI forwarding if possible
+  setup_gui_support
+
+  prepare_dotfile_mounts
+  prepare_volumes
+  prepare_common_args
+
+  # Determine which command to run inside the container
+  determine_command
+
+  # Run the container with all accumulated options
+  run_container
+}
+
+main "$@"

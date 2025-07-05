@@ -12,9 +12,10 @@ echo ""
 ERRORS="$(echo "${HEALTH}" | grep ERROR)"
 ARE_ERRORS="$?"
 
-# Ensure no errors
-if [ $ARE_ERRORS -ne 0 ]
+# Ensure no errors, 1 means grep found nothing; no errors.
+if [ $ARE_ERRORS -ne "1" ]
 then
+  echo "Return code: $ARE_ERRORS"
   echo "$ERRORS"
   echo "FAILED health check!"
   exit 1
