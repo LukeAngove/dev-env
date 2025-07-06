@@ -1,4 +1,6 @@
-# nix-dev
+# Luke's DevEnv
+
+![CI](https://github.com/LukeAngove/dev-env/actions/workflows/nix-ci.yml/badge.svg)
 
 This repository contains a development environment configured with Nix, primarily for Neovim setup and related tools.
 
