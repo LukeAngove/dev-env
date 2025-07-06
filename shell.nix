@@ -11,6 +11,7 @@ pkgs.mkShellNoCC {
     pkgs.clang
     pkgs.nodejs
     pkgs.glibcLocales
+    pkgs.github-cli
 
     # for nvim
 
@@ -19,6 +20,7 @@ pkgs.mkShellNoCC {
     pkgs.cargo
     pkgs.python313Packages.python
     pkgs.python313Packages.pip
+    pkgs.uv
     pkgs.lua51Packages.lua
     pkgs.lua51Packages.luarocks
     pkgs.ruby
@@ -26,6 +28,7 @@ pkgs.mkShellNoCC {
     pkgs.julia
     pkgs.php
     pkgs.phpPackages.composer
+    pkgs.nodejs
 
     # tools
     pkgs.unzip # For Mason
@@ -33,12 +36,21 @@ pkgs.mkShellNoCC {
     pkgs.tree-sitter
     pkgs.wget
     pkgs.xclip
+    pkgs.fzf
+    pkgs.bat
+    pkgs.fd
   ];
 
   shellHook = ''
   export LOCALE_ARCHIVE=${pkgs.glibcLocales}/lib/locale/locale-archive
   export LC_ALL=en_US.UTF-8
   export LANG=en_US.UTF-8
+
+  export PATH=$HOME/.node_modules/@google/gemini-cli/bin:$PATH
+  if ! command -v gemini &> /dev/null
+  then
+    npm install -g @google/gemini-cli
+  fi
 '';
 }
 
