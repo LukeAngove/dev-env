@@ -55,10 +55,10 @@ setup_user_info() {
 
 
 detect_container_engine() {
-  if command -v docker &>/dev/null; then
-    ENGINE="docker"
-  elif command -v podman &>/dev/null; then
+  if command -v podman &>/dev/null; then
     ENGINE="podman"
+  elif command -v docker &>/dev/null; then
+    ENGINE="docker"
   else
     echo "❌ Error: Docker or Podman not found." >&2
     exit 1
@@ -108,6 +108,7 @@ prepare_dotfile_mounts() {
     ".netrc"
     ".gitconfig"
     ".gitrepos"
+    ".gemini"
     ".ssh"
   )
 
@@ -116,7 +117,7 @@ prepare_dotfile_mounts() {
     local host_target="$HOME/$target"
     local container_target="$CONTAINER_HOME/$target"
     if [[ -e "$host_target" ]]; then
-      DOTFILE_MOUNTS+=(--volume "$host_target:$container_target:ro")
+      DOTFILE_MOUNTS+=(--volume "$host_target:$container_target")
       debug "Mounting dotfile: $host_target -> $container_target"
     else
       debug "Skipping missing: $host_target"
@@ -128,8 +129,9 @@ prepare_volumes() {
   VOLUMES=(
     --volume "$PWD:/workdir"
     --volume nix-global-store:/nix
-    --volume nix-user-cache:/root/.cache/nix
-    --volume nvim-plugins:/root/.local/share/nvim
+    --volume nix-user-cache:$CONTAINER_HOME/.cache/nix
+    --volume npm-packages:$CONTAINER_HOME/.npm-packages
+    --volume nvim-plugins:$CONTAINER_HOME/.local/share/nvim
     --volume "$SCRIPT_DIR/nvim_config:$CONTAINER_HOME/.config/nvim"
     --volume "$SCRIPT_DIR/checkhealth.sh:$CONTAINER_HOME/checkhealth.sh"
     --volume "$SCRIPT_DIR/shell.nix:/workdir/shell.nix"
@@ -148,10 +150,8 @@ prepare_common_args() {
 determine_command() {
   if [[ "$MODE" == "checkhealth" ]]; then
     CMD=("nix-shell" "--pure" "--run" "$CONTAINER_HOME/checkhealth.sh")
-
   elif [[ ${#ARGS[@]} -gt 0 ]]; then
-    CMD=("${ARGS[@]}")
-
+    CMD=("nix-shell" "--pure" "--run" "${ARGS[@]}")
   else
     CMD=("nix-shell" "--pure")
   fi
